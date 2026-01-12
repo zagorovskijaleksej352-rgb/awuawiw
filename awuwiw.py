@@ -2,117 +2,170 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# Konfiguracja połączenia
+# =========================
+# KONFIGURACJA BAZY
+# =========================
 DB_URL = "sqlite:///magazyn.db"
-engine = create_engine(DB_URL)
+engine = create_engine(DB_URL, future=True)
 
 def init_db():
-    with engine.connect() as conn:
+    with engine.begin() as conn:
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS kategorie (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nazwa TEXT NOT NULL
-            );
+                nazwa TEXT UNIQUE NOT NULL
+            )
         """))
+
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS magazyn228 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nazwa TEXT NOT NULL,
-                liczba INTEGER,
-                cena NUMERIC,
+                liczba INTEGER NOT NULL,
+                cena REAL NOT NULL,
                 categorie INTEGER,
-                FOREIGN KEY (categorie) REFERENCES kategorie (id)
-            );
+                FOREIGN KEY (categorie) REFERENCES kategorie(id)
+            )
         """))
-        conn.commit()
 
 init_db()
 
+# =========================
+# UI
+# =========================
 st.set_page_config(page_title="Magazyn Pro", layout="wide")
 st.title("📦 System Zarządzania Magazynem")
 
-# --- SEKCJA: STATYSTYKI (NOWOŚĆ) ---
+# =========================
+# STATYSTYKI
+# =========================
 st.subheader("📊 Podsumowanie Magazynu")
+
 df_stats = pd.read_sql("SELECT liczba, cena FROM magazyn228", engine)
+
 if not df_stats.empty:
-    total_items = df_stats['liczba'].sum()
-    # Obliczanie wartości: suma (liczba * cena)
-    total_value = (df_stats['liczba'] * df_stats['cena']).sum()
-    
+    total_items = int(df_stats["liczba"].sum())
+    total_value = (df_stats["liczba"] * df_stats["cena"]).sum()
+
     col1, col2 = st.columns(2)
     col1.metric("Suma produktów", f"{total_items} szt.")
     col2.metric("Wartość magazynu", f"{total_value:,.2f} PLN")
 else:
     st.info("Magazyn jest pusty.")
 
----
+st.divider()
 
-# --- SEKCJA 1: DODAWANIE ---
+# =========================
+# DODAWANIE
+# =========================
 col_kat, col_prod = st.columns(2)
 
+# --- KATEGORIE ---
 with col_kat:
-    st.header("Dodaj Kategorię")
+    st.header("➕ Dodaj kategorię")
+
     with st.form("form_kategoria", clear_on_submit=True):
         kat_nazwa = st.text_input("Nazwa kategorii")
-        submit_kat = st.form_submit_button("Zapisz kategorię")
-        
-        if submit_kat and kat_nazwa:
-            with engine.connect() as conn:
-                conn.execute(text("INSERT INTO kategorie (nazwa) VALUES (:n)"), {"n": kat_nazwa})
-                conn.commit()
-            st.success(f"Dodano: {kat_nazwa}")
-            st.rerun()
+        submit_kat = st.form_submit_button("Zapisz")
 
+        if submit_kat:
+            if kat_nazwa.strip() == "":
+                st.error("Podaj nazwę kategorii")
+            else:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text("INSERT INTO kategorie (nazwa) VALUES (:n)"),
+                            {"n": kat_nazwa.strip()}
+                        )
+                    st.success(f"Dodano kategorię: {kat_nazwa}")
+                    st.rerun()
+                except Exception:
+                    st.warning("Taka kategoria już istnieje")
+
+# --- PRODUKTY ---
 with col_prod:
-    st.header("Dodaj Produkt")
+    st.header("➕ Dodaj produkt")
+
     df_kat = pd.read_sql("SELECT * FROM kategorie", engine)
-    kategorie_dict = dict(zip(df_kat['nazwa'], df_kat['id']))
 
-    with st.form("form_produkt", clear_on_submit=True):
-        prod_nazwa = st.text_input("Nazwa produktu")
-        prod_liczba = st.number_input("Liczba", step=1, value=0)
-        prod_cena = st.number_input("Cena", step=0.01, format="%.2f")
-        prod_kat_name = st.selectbox("Kategoria", options=list(kategorie_dict.keys()))
-        submit_prod = st.form_submit_button("Dodaj produkt")
-        
-        if submit_prod and prod_nazwa:
-            kat_id = kategorie_dict[prod_kat_name]
-            with engine.connect() as conn:
-                query = text("INSERT INTO magazyn228 (nazwa, liczba, cena, categorie) VALUES (:n, :l, :c, :k)")
-                conn.execute(query, {"n": prod_nazwa, "l": prod_liczba, "c": prod_cena, "k": kat_id})
-                conn.commit()
-            st.success(f"Dodano: {prod_nazwa}")
-            st.rerun()
+    if df_kat.empty:
+        st.warning("Najpierw dodaj kategorię")
+    else:
+        kategorie_dict = dict(zip(df_kat["nazwa"], df_kat["id"]))
 
----
+        with st.form("form_produkt", clear_on_submit=True):
+            prod_nazwa = st.text_input("Nazwa produktu")
+            prod_liczba = st.number_input("Ilość", min_value=0, step=1)
+            prod_cena = st.number_input("Cena (PLN)", min_value=0.0, step=0.01)
+            prod_kat_name = st.selectbox("Kategoria", list(kategorie_dict.keys()))
+            submit_prod = st.form_submit_button("Dodaj")
 
-# --- SEKCJA 3: PODGLĄD I USUWANIE (ULEPSZONE) ---
-st.header("🔍 Zarządzanie Stanem Magazynowym")
+            if submit_prod:
+                if prod_nazwa.strip() == "":
+                    st.error("Podaj nazwę produktu")
+                else:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text("""
+                                INSERT INTO magazyn228
+                                (nazwa, liczba, cena, categorie)
+                                VALUES (:n, :l, :c, :k)
+                            """),
+                            {
+                                "n": prod_nazwa.strip(),
+                                "l": int(prod_liczba),
+                                "c": float(prod_cena),
+                                "k": kategorie_dict[prod_kat_name],
+                            },
+                        )
+                    st.success(f"Dodano produkt: {prod_nazwa}")
+                    st.rerun()
 
-query_view = """
-    SELECT m.id, m.nazwa, m.liczba, m.cena, k.nazwa as kategoria 
-    FROM magazyn228 m 
+st.divider()
+
+# =========================
+# PODGLĄD + USUWANIE
+# =========================
+st.header("🔍 Stan magazynu")
+
+query = """
+    SELECT 
+        m.id,
+        m.nazwa,
+        m.liczba,
+        m.cena,
+        k.nazwa AS kategoria
+    FROM magazyn228 m
     LEFT JOIN kategorie k ON m.categorie = k.id
 """
-df_view = pd.read_sql(query_view, engine)
 
-if not df_view.empty:
-    # Wyświetlanie danych z edytorem (możliwość usuwania)
-    event = st.dataframe(
-        df_view, 
-        use_container_width=True, 
-        hide_index=True,
-        column_config={"id": None} # Ukrywamy ID przed użytkownikiem
-    )
-    
-    # Funkcja usuwania wybranego produktu
-    st.subheader("🗑️ Usuń produkt")
-    product_to_delete = st.selectbox("Wybierz produkt do usunięcia", df_view['nazwa'].unique())
-    if st.button("Usuń wybrany produkt", type="primary"):
-        with engine.connect() as conn:
-            conn.execute(text("DELETE FROM magazyn228 WHERE nazwa = :n"), {"n": product_to_delete})
-            conn.commit()
-        st.warning(f"Usunięto {product_to_delete}")
-        st.rerun()
+df_view = pd.read_sql(query, engine)
+
+if df_view.empty:
+    st.info("Brak produktów w magazynie")
 else:
-    st.write("Brak danych do wyświetlenia.")
+    st.dataframe(
+        df_view.drop(columns="id"),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.subheader("🗑️ Usuń produkt")
+
+    product_map = {
+        f"{row.nazwa} (ID {row.id})": row.id
+        for _, row in df_view.iterrows()
+    }
+
+    selected = st.selectbox("Wybierz produkt", list(product_map.keys()))
+
+    if st.button("Usuń", type="primary"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM magazyn228 WHERE id = :id"),
+                {"id": product_map[selected]}
+            )
+        st.warning("Produkt usunięty")
+        st.rerun()
+
