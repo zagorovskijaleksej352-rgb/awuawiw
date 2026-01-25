@@ -5,11 +5,19 @@ import os
 load_dotenv()
 from sqlalchemy import create_engine, text
 
+try:
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    st.success("Połączono z Supabase ✅")
+except Exception as e:
+    st.error(f"Błąd połączenia: {e}")
+    st.stop()
+
 # =========================
 # KONFIGURACJA BAZY
 # =========================
-DB_URL = "sqlite:///magazyn.db"
-engine = create_engine(DB_URL, future=True)
+DB_URL = os.getenv("SUPABASE_DB_URL") or st.secrets["SUPABASE_DB_URL"]
+engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 
 def init_db():
     with engine.begin() as conn:
