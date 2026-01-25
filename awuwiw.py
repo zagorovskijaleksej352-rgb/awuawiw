@@ -1,17 +1,8 @@
-import streamlit as st
-import pandas as pd
-from dotenv import load_dotenv
+
 import os
-load_dotenv()
+import streamlit as st
 from sqlalchemy import create_engine, text
 
-try:
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    st.success("Połączono z Supabase ✅")
-except Exception as e:
-    st.error(f"Błąd połączenia: {e}")
-    st.stop()
 
 # =========================
 # KONFIGURACJA BAZY
