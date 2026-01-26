@@ -1,36 +1,45 @@
-
 import os
 import streamlit as st
+import pandas as pd
 from sqlalchemy import create_engine, text
-
 
 # =========================
 # KONFIGURACJA BAZY
 # =========================
-DB_URL = os.getenv("SUPABASE_URL") or st.secrets["SUPABASE_URL"]
+# Upewnij się, że w Secrets masz klucz SUPABASE_DB_URL zaczynający się od postgresql://
+DB_URL = st.secrets.get("SUPABASE_DB_URL") or os.getenv("SUPABASE_DB_URL")
+
+if not DB_URL:
+    st.error("Błąd: Nie znaleziono SUPABASE_DB_URL w Secrets!")
+    st.stop()
+
 engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 
 def init_db():
     with engine.begin() as conn:
+        # W PostgreSQL używamy SERIAL zamiast INTEGER PRIMARY KEY AUTOINCREMENT
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS kategorie (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 nazwa TEXT UNIQUE NOT NULL
             )
         """))
 
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS magazyn228 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 nazwa TEXT NOT NULL,
                 liczba INTEGER NOT NULL,
                 cena REAL NOT NULL,
-                categorie INTEGER,
-                FOREIGN KEY (categorie) REFERENCES kategorie(id)
+                categorie INTEGER REFERENCES kategorie(id)
             )
         """))
 
-init_db()
+# Inicjalizacja bazy
+try:
+    init_db()
+except Exception as e:
+    st.error(f"Błąd inicjalizacji bazy: {e}")
 
 # =========================
 # UI
@@ -43,17 +52,19 @@ st.title("📦 System Zarządzania Magazynem")
 # =========================
 st.subheader("📊 Podsumowanie Magazynu")
 
-df_stats = pd.read_sql("SELECT liczba, cena FROM magazyn228", engine)
+try:
+    df_stats = pd.read_sql("SELECT liczba, cena FROM magazyn228", engine)
+    if not df_stats.empty:
+        total_items = int(df_stats["liczba"].sum())
+        total_value = (df_stats["liczba"] * df_stats["cena"]).sum()
 
-if not df_stats.empty:
-    total_items = int(df_stats["liczba"].sum())
-    total_value = (df_stats["liczba"] * df_stats["cena"]).sum()
-
-    col1, col2 = st.columns(2)
-    col1.metric("Suma produktów", f"{total_items} szt.")
-    col2.metric("Wartość magazynu", f"{total_value:,.2f} PLN")
-else:
-    st.info("Magazyn jest pusty.")
+        col1, col2 = st.columns(2)
+        col1.metric("Suma produktów", f"{total_items} szt.")
+        col2.metric("Wartość magazynu", f"{total_value:,.2f} PLN")
+    else:
+        st.info("Magazyn jest pusty.")
+except Exception:
+    st.info("Dodaj pierwszy produkt, aby zobaczyć statystyki.")
 
 st.divider()
 
@@ -65,7 +76,6 @@ col_kat, col_prod = st.columns(2)
 # --- KATEGORIE ---
 with col_kat:
     st.header("➕ Dodaj kategorię")
-
     with st.form("form_kategoria", clear_on_submit=True):
         kat_nazwa = st.text_input("Nazwa kategorii")
         submit_kat = st.form_submit_button("Zapisz")
@@ -88,41 +98,40 @@ with col_kat:
 # --- PRODUKTY ---
 with col_prod:
     st.header("➕ Dodaj produkt")
+    try:
+        df_kat = pd.read_sql("SELECT * FROM kategorie", engine)
+        if df_kat.empty:
+            st.warning("Najpierw dodaj kategorię")
+        else:
+            kategorie_dict = dict(zip(df_kat["nazwa"], df_kat["id"]))
+            with st.form("form_produkt", clear_on_submit=True):
+                prod_nazwa = st.text_input("Nazwa produktu")
+                prod_liczba = st.number_input("Ilość", min_value=0, step=1)
+                prod_cena = st.number_input("Cena (PLN)", min_value=0.0, step=0.01)
+                prod_kat_name = st.selectbox("Kategoria", list(kategorie_dict.keys()))
+                submit_prod = st.form_submit_button("Dodaj")
 
-    df_kat = pd.read_sql("SELECT * FROM kategorie", engine)
-
-    if df_kat.empty:
-        st.warning("Najpierw dodaj kategorię")
-    else:
-        kategorie_dict = dict(zip(df_kat["nazwa"], df_kat["id"]))
-
-        with st.form("form_produkt", clear_on_submit=True):
-            prod_nazwa = st.text_input("Nazwa produktu")
-            prod_liczba = st.number_input("Ilość", min_value=0, step=1)
-            prod_cena = st.number_input("Cena (PLN)", min_value=0.0, step=0.01)
-            prod_kat_name = st.selectbox("Kategoria", list(kategorie_dict.keys()))
-            submit_prod = st.form_submit_button("Dodaj")
-
-            if submit_prod:
-                if prod_nazwa.strip() == "":
-                    st.error("Podaj nazwę produktu")
-                else:
-                    with engine.begin() as conn:
-                        conn.execute(
-                            text("""
-                                INSERT INTO magazyn228
-                                (nazwa, liczba, cena, categorie)
-                                VALUES (:n, :l, :c, :k)
-                            """),
-                            {
-                                "n": prod_nazwa.strip(),
-                                "l": int(prod_liczba),
-                                "c": float(prod_cena),
-                                "k": kategorie_dict[prod_kat_name],
-                            },
-                        )
-                    st.success(f"Dodano produkt: {prod_nazwa}")
-                    st.rerun()
+                if submit_prod:
+                    if prod_nazwa.strip() == "":
+                        st.error("Podaj nazwę produktu")
+                    else:
+                        with engine.begin() as conn:
+                            conn.execute(
+                                text("""
+                                    INSERT INTO magazyn228 (nazwa, liczba, cena, categorie)
+                                    VALUES (:n, :l, :c, :k)
+                                """),
+                                {
+                                    "n": prod_nazwa.strip(),
+                                    "l": int(prod_liczba),
+                                    "c": float(prod_cena),
+                                    "k": kategorie_dict[prod_kat_name],
+                                },
+                            )
+                        st.success(f"Dodano produkt: {prod_nazwa}")
+                        st.rerun()
+    except Exception as e:
+        st.error(f"Błąd ładowania kategorii: {e}")
 
 st.divider()
 
@@ -142,32 +151,31 @@ query = """
     LEFT JOIN kategorie k ON m.categorie = k.id
 """
 
-df_view = pd.read_sql(query, engine)
+try:
+    df_view = pd.read_sql(query, engine)
+    if df_view.empty:
+        st.info("Brak produktów w magazynie")
+    else:
+        st.dataframe(
+            df_view.drop(columns="id"),
+            use_container_width=True,
+            hide_index=True
+        )
 
-if df_view.empty:
-    st.info("Brak produktów w magazynie")
-else:
-    st.dataframe(
-        df_view.drop(columns="id"),
-        use_container_width=True,
-        hide_index=True
-    )
+        st.subheader("🗑️ Usuń produkt")
+        product_map = {
+            f"{row.nazwa} (ID {row.id})": row.id
+            for _, row in df_view.iterrows()
+        }
+        selected = st.selectbox("Wybierz produkt", list(product_map.keys()))
 
-    st.subheader("🗑️ Usuń produkt")
-
-    product_map = {
-        f"{row.nazwa} (ID {row.id})": row.id
-        for _, row in df_view.iterrows()
-    }
-
-    selected = st.selectbox("Wybierz produkt", list(product_map.keys()))
-
-    if st.button("Usuń", type="primary"):
-        with engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM magazyn228 WHERE id = :id"),
-                {"id": product_map[selected]}
-            )
-        st.warning("Produkt usunięty")
-        st.rerun()
-
+        if st.button("Usuń", type="primary"):
+            with engine.begin() as conn:
+                conn.execute(
+                    text("DELETE FROM magazyn228 WHERE id = :id"),
+                    {"id": product_map[selected]}
+                )
+            st.warning("Produkt usunięty")
+            st.rerun()
+except Exception as e:
+    st.info("Baza danych jest pusta lub jeszcze nie zainicjalizowana.")
