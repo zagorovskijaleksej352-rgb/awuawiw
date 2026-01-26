@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 # =========================
 # KONFIGURACJA BAZY
 # =========================
-DB_URL = os.getenv("SUPABASE_DB_URL") or st.secrets["SUPABASE_DB_URL"]
+DB_URL = os.getenv("SUPABASE_URL") or st.secrets["SUPABASE_URL"]
 engine = create_engine(DB_URL, future=True, pool_pre_ping=True)
 
 def init_db():
