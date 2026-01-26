@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 # KONFIGURACJA BAZY
 # =========================
 # Upewnij się, że w Secrets masz klucz SUPABASE_DB_URL zaczynający się od postgresql://
-DB_URL = st.secrets.get("SUPABASE_DB_URL") or os.getenv("SUPABASE_DB_URL")
+DB_URL = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
 
 if not DB_URL:
     st.error("Błąd: Nie znaleziono SUPABASE_DB_URL w Secrets!")
